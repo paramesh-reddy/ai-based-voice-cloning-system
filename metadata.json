@@ -1,0 +1,6 @@
+{
+  "name": "AI-Based Voice Cloning System",
+  "description": "Generate speech from text using an authorized reference voice recording with real speaker-conditioned acoustic modeling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
