@@ -2,11 +2,15 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const BACKEND_DIR = __dirname;
+const ROOT_DIR = path.resolve(__dirname, '..');
+const FRONTEND_DIR = path.join(ROOT_DIR, 'frontend');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -14,20 +18,37 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json({ limit: '30mb' }));
 app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 
-const SAMPLES_DIR = fs.existsSync(path.join(__dirname, 'backend', 'samples'))
-  ? path.join(__dirname, 'backend', 'samples')
-  : path.join(__dirname, 'samples');
-const OUTPUTS_DIR = fs.existsSync(path.join(__dirname, 'backend', 'outputs'))
-  ? path.join(__dirname, 'backend', 'outputs')
-  : path.join(__dirname, 'outputs');
-const TEMP_DIR = path.join(__dirname, 'temp');
+const SAMPLES_DIR = path.join(BACKEND_DIR, 'samples');
+const OUTPUTS_DIR = path.join(BACKEND_DIR, 'outputs');
+const TEMP_DIR = path.join(BACKEND_DIR, 'temp');
 
-if (!fs.existsSync(OUTPUTS_DIR)) fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
-if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
-if (!fs.existsSync(SAMPLES_DIR)) fs.mkdirSync(SAMPLES_DIR, { recursive: true });
+for (const dir of [OUTPUTS_DIR, TEMP_DIR, SAMPLES_DIR]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 
-// Endpoint: Fetch bundled sample audio
-app.get('/api/sample-audio', (req: Request, res: Response) => {
+function resolvePython(): string {
+  const candidates = process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python'];
+  for (const cmd of candidates) {
+    try {
+      execFileSync(cmd, ['--version'], { stdio: 'ignore' });
+      return cmd;
+    } catch {
+      continue;
+    }
+  }
+  return candidates[0];
+}
+
+const PYTHON = resolvePython();
+
+function runPython(args: string[]) {
+  return spawn(PYTHON, args, {
+    cwd: BACKEND_DIR,
+    env: { ...process.env, PYTHONPATH: BACKEND_DIR, PYTHONIOENCODING: 'utf-8' },
+  });
+}
+
+app.get('/api/sample-audio', (_req: Request, res: Response) => {
   const samplePath = path.join(SAMPLES_DIR, 'sample_voice.wav');
   if (!fs.existsSync(samplePath)) {
     return res.status(404).json({ error: 'Sample audio file not found' });
@@ -45,7 +66,6 @@ app.get('/api/sample-audio', (req: Request, res: Response) => {
   });
 });
 
-// Endpoint: Validate uploaded audio
 app.post('/api/validate-audio', async (req: Request, res: Response) => {
   try {
     const { base64Audio, filename } = req.body;
@@ -55,7 +75,7 @@ app.post('/api/validate-audio', async (req: Request, res: Response) => {
 
     const buffer = Buffer.from(base64Audio, 'base64');
     const sizeBytes = buffer.length;
-    const maxSizeBytes = 15 * 1024 * 1024; // 15 MB
+    const maxSizeBytes = 15 * 1024 * 1024;
 
     if (sizeBytes === 0) {
       return res.status(400).json({ is_valid: false, error_message: 'The uploaded audio file is empty.' });
@@ -76,12 +96,10 @@ app.post('/api/validate-audio', async (req: Request, res: Response) => {
       });
     }
 
-    // Write temp file to probe via ffprobe/ffmpeg
     const tempFile = path.join(TEMP_DIR, `validate_${Date.now()}_${path.basename(filename || 'audio.wav')}`);
     fs.writeFileSync(tempFile, buffer);
 
-    // Call python inspection script
-    const pyProcess = spawn('python3', [
+    const pyProcess = runPython([
       '-c',
       `
 import sys, json
@@ -119,10 +137,11 @@ except Exception as e:
     });
 
     pyProcess.on('close', () => {
-      // Clean up temp file
       try {
         fs.unlinkSync(tempFile);
-      } catch (e) {}
+      } catch {
+        /* temp file already removed */
+      }
 
       try {
         const result = JSON.parse(outputData.trim());
@@ -131,7 +150,7 @@ except Exception as e:
           fileSizeBytes: sizeBytes,
           filename: path.basename(filename || 'recording.wav'),
         });
-      } catch (e) {
+      } catch {
         res.status(500).json({ is_valid: false, error_message: 'Failed to inspect audio metadata.' });
       }
     });
@@ -140,12 +159,10 @@ except Exception as e:
   }
 });
 
-// Endpoint: Generate Speech (Voice Cloning)
 app.post('/api/clone-voice', async (req: Request, res: Response) => {
   try {
     const { text, base64Audio, filename, language, hasPermission } = req.body;
 
-    // 1. Authorization check
     if (!hasPermission) {
       return res.status(403).json({
         success: false,
@@ -153,7 +170,6 @@ app.post('/api/clone-voice', async (req: Request, res: Response) => {
       });
     }
 
-    // 2. Text check
     if (!text || !text.trim()) {
       return res.status(400).json({
         success: false,
@@ -184,12 +200,9 @@ app.post('/api/clone-voice', async (req: Request, res: Response) => {
     const outputPath = path.join(OUTPUTS_DIR, outputFilename);
 
     const startTime = Date.now();
+    const scriptPath = path.join(BACKEND_DIR, 'generate_sample.py');
 
-    const scriptPath = fs.existsSync(path.join(__dirname, 'backend', 'generate_sample.py'))
-      ? path.join(__dirname, 'backend', 'generate_sample.py')
-      : path.join(__dirname, 'generate_sample.py');
-
-    const pyProcess = spawn('python3', [
+    const pyProcess = runPython([
       scriptPath,
       '--ref', tempRefPath,
       '--text', text.trim(),
@@ -209,10 +222,11 @@ app.post('/api/clone-voice', async (req: Request, res: Response) => {
     });
 
     pyProcess.on('close', (code) => {
-      // Clean temp reference file
       try {
         fs.unlinkSync(tempRefPath);
-      } catch (e) {}
+      } catch {
+        /* temp file already removed */
+      }
 
       if (code !== 0 || !fs.existsSync(outputPath)) {
         return res.status(500).json({
@@ -245,7 +259,6 @@ app.post('/api/clone-voice', async (req: Request, res: Response) => {
   }
 });
 
-// Endpoint: Download generated audio file
 app.get('/api/download/:filename', (req: Request, res: Response) => {
   const safeName = path.basename(req.params.filename);
   const filePath = path.join(OUTPUTS_DIR, safeName);
@@ -257,23 +270,25 @@ app.get('/api/download/:filename', (req: Request, res: Response) => {
   fs.createReadStream(filePath).pipe(res);
 });
 
-// Setup Vite middleware for local development
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
+      configFile: path.join(FRONTEND_DIR, 'vite.config.ts'),
+      root: FRONTEND_DIR,
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    const distDir = path.join(FRONTEND_DIR, 'dist');
+    app.use(express.static(distDir));
+    app.get('*', (_req: Request, res: Response) => {
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running at http://0.0.0.0:${PORT}`);
+    console.log(`Server is running at http://localhost:${PORT}`);
   });
 }
 

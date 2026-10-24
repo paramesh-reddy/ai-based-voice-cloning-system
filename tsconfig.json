@@ -18,11 +18,12 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
-        "./*"
+        "./frontend/*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist"]
+  "include": ["backend/server.ts", "frontend/vite.config.ts"],
+  "exclude": ["dist", "frontend/dist", "node_modules"]
 }

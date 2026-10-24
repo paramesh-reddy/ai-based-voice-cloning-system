@@ -2,6 +2,7 @@
 node_modules/
 build/
 dist/
+frontend/dist/
 coverage/
 .DS_Store
 *.log
@@ -22,9 +23,13 @@ env/
 
 # Model Weights and Large Audio Cache
 models_cache/
+backend/models_cache/
 outputs/*.wav
 !outputs/.gitkeep
+backend/outputs/*.wav
+!backend/outputs/.gitkeep
 temp/
+backend/temp/
 *.tmp
 
 # IDE

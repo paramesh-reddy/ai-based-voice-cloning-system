@@ -40,9 +40,9 @@ This system addresses these challenges by:
 - **Programming Language**: Python 3.10 / 3.11 & TypeScript / Node.js
 - **Machine Learning & Synthesis**: PyTorch, Hugging Face Transformers (`microsoft/speecht5_tts`, `microsoft/speecht5_hifigan`), and Acoustic Vocal Tract Resonance Modeling
 - **Audio Processing**: Librosa, SoundFile, FFmpeg, SciPy, NumPy
-- **User Interface**: Streamlit (`app.py`) and React 19 with Tailwind CSS (`src/App.tsx`)
-- **Backend Server**: Express with TypeScript (`server.ts`)
-- **Testing**: Pytest 9.x (`pytest -v tests`) & native runner (`python3 run_tests.py`)
+- **User Interface**: Streamlit (`backend/app.py`) and React 19 with Tailwind CSS (`frontend/src/App.tsx`)
+- **Backend Server**: Express with TypeScript (`backend/server.ts`)
+- **Testing**: Pytest 9.x (`pytest -v backend/tests`) & native runner (`python backend/run_tests.py`)
 - **Configuration**: Python Dotenv & centralized dataclass configs (`utils/config.py`)
 
 ---
@@ -53,7 +53,8 @@ The codebase follows a modular separation of concerns:
 
 ```
 voice-cloning-system/
-├── backend/                               # Standalone Python backend & machine learning service
+├── backend/                               # Python services and Express API
+│   ├── server.ts                          # Express API, Python bridge, and Vite dev middleware
 │   ├── app.py                             # Streamlit web application entry point
 │   ├── generate_sample.py                 # CLI speech synthesis tool
 │   ├── run_tests.py                       # Automated test runner (pytest / native)
@@ -82,8 +83,10 @@ voice-cloning-system/
 │   └── outputs/
 │       └── .gitkeep                       # Destination directory for generated speech WAV files
 │
-├── frontend/                              # Standalone React web console & UI components
+├── frontend/                              # React web console
 │   ├── index.html                         # Frontend HTML entry point
+│   ├── vite.config.ts                     # Vite and Tailwind configuration
+│   ├── tsconfig.json                      # Frontend TypeScript configuration
 │   └── src/
 │       ├── App.tsx                        # Main voice cloning console container
 │       ├── types.ts                       # TypeScript interfaces for audio metadata & responses
@@ -97,7 +100,6 @@ voice-cloning-system/
 │       ├── main.tsx
 │       └── index.css
 │
-├── server.ts                              # Express full-stack API server & Vite dev middleware
 ├── package.json                           # Node/npm scripts and dependencies
 ├── .env.example                           # Environment configuration template
 └── README.md                              # Complete system documentation
@@ -197,7 +199,7 @@ python3 -m venv venv
 source venv/bin/activate
 
 # 4. Install Python dependencies
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 
 # 5. Install Node dependencies (for React / Express web console)
 npm install
@@ -214,7 +216,7 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 
 # 3. Install Python dependencies
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 
 # 4. Install Node dependencies
 npm install
@@ -224,7 +226,7 @@ npm install
 
 ## 12. Configuration Options
 
-Settings are centralized in `utils/config.py` and can be customized via `.env`:
+Settings are centralized in `backend/utils/config.py` and can be customized via `.env`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -255,6 +257,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 Runs the native Python Streamlit interface:
 
 ```bash
+cd backend
 streamlit run app.py
 ```
 Open [http://localhost:8501](http://localhost:8501) in your browser.
@@ -264,7 +267,8 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 Synthesize speech directly from your terminal:
 
 ```bash
-python3 generate_sample.py \
+cd backend
+python generate_sample.py \
   --ref samples/sample_voice.wav \
   --text "Speech synthesis completed using command-line interface." \
   --output outputs/cli_output.wav \
@@ -279,13 +283,15 @@ python3 generate_sample.py \
 Run the full pytest suite:
 
 ```bash
+cd backend
 pytest -v tests/
 ```
 
 Or run via the built-in test runner:
 
 ```bash
-python3 run_tests.py
+cd backend
+python run_tests.py
 ```
 
 ### Test Suite Coverage:
