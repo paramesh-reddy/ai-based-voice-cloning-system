@@ -338,8 +338,7 @@ python run_tests.py
 | `Unsupported audio format` | Uploaded file has unsupported extension | Use standard WAV, MP3, FLAC, M4A, or OGG recordings. |
 | `Text exceeds maximum allowed length` | Text is longer than 1,000 characters | Shorten the text or synthesize in multi-sentence paragraphs. |
 | `FFmpeg is required for audio decoding` | FFmpeg binary not found on PATH | Install FFmpeg using `sudo apt install ffmpeg` or `brew install ffmpeg`. |
-
----
+h---
 
 ## 19. Responsible Voice Use Notice
 
