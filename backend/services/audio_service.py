@@ -42,6 +42,72 @@ class DecodedAudio:
     metadata: AudioMetadata
 
 
+def _resample_linear(samples: List[float], source_rate: int, target_rate: int) -> List[float]:
+    """Resamples mono samples with linear interpolation."""
+    if source_rate == target_rate or source_rate <= 0 or not samples:
+        return samples
+
+    ratio = target_rate / source_rate
+    new_length = max(1, int(len(samples) * ratio))
+    last = len(samples) - 1
+    resampled: List[float] = []
+    for index in range(new_length):
+        origin = index / ratio
+        left = int(origin)
+        if left >= last:
+            resampled.append(samples[last])
+            continue
+        fraction = origin - left
+        resampled.append((1.0 - fraction) * samples[left] + fraction * samples[left + 1])
+    return resampled
+
+
+def _decode_wav_pcm(file_path: Union[str, Path], target_sr: int) -> Tuple[List[float], int]:
+    """Decodes PCM WAV files with the Python standard library when FFmpeg is unavailable."""
+    import wave
+
+    try:
+        wav_file = wave.open(str(file_path), "rb")
+    except wave.Error as exc:
+        raise RuntimeError(f"Could not read WAV audio: {exc}") from exc
+
+    with wav_file:
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        source_rate = wav_file.getframerate()
+        frame_count = wav_file.getnframes()
+        raw_bytes = wav_file.readframes(frame_count)
+
+    if sample_width == 2:
+        count = len(raw_bytes) // 2
+        integers = struct.unpack(f"<{count}h", raw_bytes[: count * 2])
+        samples = [value / 32768.0 for value in integers]
+    elif sample_width == 1:
+        samples = [(value - 128) / 128.0 for value in raw_bytes]
+    elif sample_width == 4:
+        count = len(raw_bytes) // 4
+        integers = struct.unpack(f"<{count}i", raw_bytes[: count * 4])
+        samples = [value / 2147483648.0 for value in integers]
+    else:
+        raise RuntimeError(
+            f"Unsupported WAV sample width ({sample_width} bytes). Use 16-bit PCM WAV, or install FFmpeg for other formats."
+        )
+
+    if channels > 1:
+        mono: List[float] = []
+        for index in range(0, len(samples) - channels + 1, channels):
+            frame = samples[index : index + channels]
+            mono.append(sum(frame) / float(channels))
+        samples = mono
+
+    if not samples or source_rate <= 0:
+        raise ValueError("Decoded audio stream contains zero bytes.")
+
+    if source_rate != target_sr:
+        samples = _resample_linear(samples, source_rate, target_sr)
+    return samples, target_sr
+
+
 def decode_audio_with_ffmpeg(file_path: Union[str, Path], target_sr: Optional[int] = None) -> Tuple[List[float], int]:
     """
     Decodes arbitrary audio formats (MP3, M4A, FLAC, WAV, OGG) to 16-bit mono PCM via FFmpeg.
@@ -56,8 +122,17 @@ def decode_audio_with_ffmpeg(file_path: Union[str, Path], target_sr: Optional[in
     Raises:
         RuntimeError: If FFmpeg fails or file is corrupted.
     """
-    path_str = str(file_path)
+    path = Path(file_path)
+    path_str = str(path)
     sr = target_sr if target_sr else TARGET_SAMPLE_RATE
+
+    def decode_wav_without_ffmpeg() -> Tuple[List[float], int]:
+        if path.suffix.lower() != ".wav":
+            raise RuntimeError(
+                "FFmpeg is required to decode this audio format but was not found. Install FFmpeg, or upload a WAV file."
+            )
+        logger.warning("FFmpeg was not found. Decoding WAV with the Python standard library.")
+        return _decode_wav_pcm(path, sr)
 
     cmd = [
         "ffmpeg",
@@ -75,10 +150,12 @@ def decode_audio_with_ffmpeg(file_path: Union[str, Path], target_sr: Optional[in
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode("utf-8", errors="ignore")
         logger.error(f"FFmpeg decoding failed for '{path_str}': {err_msg}")
+        if path.suffix.lower() == ".wav":
+            return decode_wav_without_ffmpeg()
         raise RuntimeError(f"Audio decoding failed: {err_msg.strip() or 'Corrupted file'}")
     except FileNotFoundError:
         logger.error("FFmpeg binary not found on the system path.")
-        raise RuntimeError("FFmpeg is required for audio decoding but was not found.")
+        return decode_wav_without_ffmpeg()
 
     raw_bytes = proc.stdout
     if not raw_bytes:

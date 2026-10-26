@@ -9,6 +9,13 @@ import os
 from pathlib import Path
 from typing import Dict, List, Set
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+except ImportError:
+    pass
+
 # Base directories
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 OUTPUT_DIR: Path = BASE_DIR / os.getenv("OUTPUT_DIR", "outputs")

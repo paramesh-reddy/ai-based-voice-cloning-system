@@ -1,3 +1,4 @@
+import dotenv from 'dotenv';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -7,6 +8,8 @@ import { createServer as createViteServer } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 const BACKEND_DIR = __dirname;
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -26,26 +29,84 @@ for (const dir of [OUTPUTS_DIR, TEMP_DIR, SAMPLES_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function resolvePython(): string {
-  const candidates = process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python'];
-  for (const cmd of candidates) {
-    try {
-      execFileSync(cmd, ['--version'], { stdio: 'ignore' });
-      return cmd;
-    } catch {
-      continue;
-    }
+type PythonCommand = { command: string; prefix: string[] };
+
+function isRealPython(command: string, prefix: string[] = []): boolean {
+  if ((command.includes('\\') || command.includes('/')) && !fs.existsSync(command)) {
+    return false;
   }
-  return candidates[0];
+  try {
+    const output = execFileSync(command, [...prefix, '-c', 'import sys; print(sys.executable)'], {
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+    });
+    const executable = output.trim().toLowerCase();
+    return executable.endsWith('.exe') ? !executable.includes('windowsapps') : executable.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function resolvePython(): PythonCommand | null {
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const versions = ['Python313', 'Python312', 'Python311', 'Python310'];
+  const candidates: PythonCommand[] = [];
+
+  for (const version of versions) {
+    if (localAppData) {
+      candidates.push({ command: path.join(localAppData, 'Programs', 'Python', version, 'python.exe'), prefix: [] });
+    }
+    candidates.push({ command: path.join('C:\\Program Files', version, 'python.exe'), prefix: [] });
+  }
+  candidates.push({ command: 'py', prefix: ['-3'] });
+  if (process.platform === 'win32') {
+    candidates.push({ command: 'python', prefix: [] });
+  } else {
+    candidates.push({ command: 'python3', prefix: [] }, { command: 'python', prefix: [] });
+  }
+
+  for (const candidate of candidates) {
+    if (isRealPython(candidate.command, candidate.prefix)) return candidate;
+  }
+  return null;
 }
 
 const PYTHON = resolvePython();
 
 function runPython(args: string[]) {
-  return spawn(PYTHON, args, {
+  if (!PYTHON) {
+    throw new Error('Python is not installed. Install Python 3.11 and restart the server.');
+  }
+  return spawn(PYTHON.command, [...PYTHON.prefix, ...args], {
     cwd: BACKEND_DIR,
-    env: { ...process.env, PYTHONPATH: BACKEND_DIR, PYTHONIOENCODING: 'utf-8' },
+    windowsHide: true,
+    env: {
+      ...process.env,
+      PYTHONPATH: BACKEND_DIR,
+      PYTHONIOENCODING: 'utf-8',
+      LOG_LEVEL: process.env.LOG_LEVEL || 'INFO',
+    },
   });
+}
+
+function parsePythonJson(output: string): Record<string, unknown> | null {
+  const trimmed = output.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const lines = trimmed
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('{') && line.endsWith('}'));
+    if (!lines.length) return null;
+    try {
+      return JSON.parse(lines[lines.length - 1]);
+    } catch {
+      return null;
+    }
+  }
 }
 
 app.get('/api/sample-audio', (_req: Request, res: Response) => {
@@ -132,8 +193,25 @@ except Exception as e:
     ]);
 
     let outputData = '';
+    let errorData = '';
     pyProcess.stdout.on('data', (chunk) => {
       outputData += chunk.toString();
+    });
+    pyProcess.stderr.on('data', (chunk) => {
+      errorData += chunk.toString();
+    });
+    pyProcess.on('error', (error) => {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch {
+        /* temp file already removed */
+      }
+      if (!res.headersSent) {
+        res.status(500).json({
+          is_valid: false,
+          error_message: `Audio inspection failed to start: ${error.message}`,
+        });
+      }
     });
 
     pyProcess.on('close', () => {
@@ -143,16 +221,24 @@ except Exception as e:
         /* temp file already removed */
       }
 
-      try {
-        const result = JSON.parse(outputData.trim());
-        res.json({
-          ...result,
-          fileSizeBytes: sizeBytes,
-          filename: path.basename(filename || 'recording.wav'),
-        });
-      } catch {
-        res.status(500).json({ is_valid: false, error_message: 'Failed to inspect audio metadata.' });
+      const result = parsePythonJson(outputData);
+      if (!result) {
+        const detail = (errorData || outputData || 'Python produced no output.').trim().slice(0, 500);
+        console.error('Audio validation failed:', detail);
+        if (!res.headersSent) {
+          res.status(500).json({
+            is_valid: false,
+            error_message: `Failed to inspect audio metadata. ${detail}`,
+          });
+        }
+        return;
       }
+
+      res.json({
+        ...result,
+        fileSizeBytes: sizeBytes,
+        filename: path.basename(filename || 'recording.wav'),
+      });
     });
   } catch (err: any) {
     res.status(500).json({ is_valid: false, error_message: err.message || 'Internal audio validation error.' });
@@ -248,7 +334,7 @@ app.post('/api/clone-voice', async (req: Request, res: Response) => {
         format: '16-bit PCM WAV',
         base64Audio: generatedBytes.toString('base64'),
         mimeType: 'audio/wav',
-        disclaimer: 'Synthetic speech output generated with reference-conditioned acoustic modeling for authorized use.',
+        disclaimer: 'Spoken from your text with a speech engine. This is synthetic speech, not a recording of the reference speaker.',
       });
     });
   } catch (err: any) {

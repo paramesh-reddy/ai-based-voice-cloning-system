@@ -219,6 +219,7 @@ class VoiceCloningModelService:
         )
 
         try:
+            engine_name = self.model_name
             # Check if transformers pipeline is fully ready
             if self._model_instance is not None and self._processor_instance is not None and self._vocoder_instance is not None:
                 import torch
@@ -235,9 +236,11 @@ class VoiceCloningModelService:
                 generated_tensor = speech.cpu().numpy()
                 out_samples = [float(s) for s in generated_tensor]
                 out_sr = 16000
+                engine_name = "speecht5"
             else:
-                # Pretrained acoustic synthesis conditioned on reference voice acoustics
-                out_samples, out_sr = self._synthesize_acoustic_conditioned_speech(
+                from services.tts_service import synthesize_spoken_audio
+
+                out_samples, out_sr, engine_name = synthesize_spoken_audio(
                     text=text,
                     reference_samples=reference_samples,
                     reference_sample_rate=reference_sample_rate,
@@ -277,11 +280,11 @@ class VoiceCloningModelService:
                 sample_rate=out_sr,
                 duration_sec=round(audio_duration, 2),
                 inference_time_sec=round(inference_duration, 2),
-                model_name=self.model_name,
+                model_name=engine_name,
                 device=self.active_device,
                 language=language,
                 asr_verified=False,
-                verification_notes="Speech generated using speaker-conditioned acoustic modeling. Optional ASR verification model not loaded to conserve CPU memory.",
+                verification_notes=f"Spoken words generated with {engine_name}.",
             )
 
         except Exception as e:

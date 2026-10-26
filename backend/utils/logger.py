@@ -32,7 +32,7 @@ def get_logger(name: str = "voice_cloning", level: Optional[str] = None) -> logg
     numeric_level = getattr(logging, log_level_name, logging.INFO)
     logger.setLevel(numeric_level)
 
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stderr)
     handler.setLevel(numeric_level)
 
     formatter = logging.Formatter(
